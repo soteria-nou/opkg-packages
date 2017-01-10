@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=soteria-scripts
-PKG_VERSION:=0.01
+PKG_VERSION:=0.02
 PKG_RELEASE:=1
 
 include $(INCLUDE_DIR)/package.mk

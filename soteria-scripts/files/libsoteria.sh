@@ -58,6 +58,8 @@ stop_tinysrv() {
 
 start_tinysrv() {
   is_running `tinysrv_pid` && stop_tinysrv
+  [ -n "$TINYSRV_PIDFILE" ] || return 1
+  [ -f "$TINYSRV_PIDFILE" ] && rm "$TINYSRV_PIDFILE"
   local _service=`which tinysrv`
   populate_dns_parts || return 0
   [ -x "$_service" ] || return 0
