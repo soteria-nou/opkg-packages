@@ -10,6 +10,10 @@ SRC_LIST="https://raw.githubusercontent.com/soteria-nou/domain-list/master/"
 TINYSRV_PIDFILE=/var/run/tinysrv.pid
 DNSMASQ_PIDFILE=/var/run/dnsmasq/dnsmasq.pid
 
+remove_file() {
+  [ -f "$1" ] && rm "$1" || true
+}
+
 get_pid() {
   local _pid
   [ -n "$2" ] && [ -f "$2" ] && kill -0 `cat "$2"` 2>/dev/null && _pid=`cat "$2"`
