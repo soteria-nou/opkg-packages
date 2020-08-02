@@ -1,28 +1,36 @@
 #!/bin/sh
 
 DNS_PARTS="cfg hsr hsn jur jun rtl rtp blk"
+DNS_HOSTS=/tmp/hosts/soteria
+
 WWW_DIR=/tmp/tinywww/
 CRT_DIR=/tmp/tinycrt/
 
-DNS_HOSTS=/tmp/dns
 SRC_LIST="https://raw.githubusercontent.com/soteria-nou/domain-list/master/"
 
+DNSMASQ_PIDFILE=/var/run/dnsmasq/dnsmasq.cfg01411c.pid
 TINYSRV_PIDFILE=/var/run/tinysrv.pid
-DNSMASQ_PIDFILE=/var/run/dnsmasq/dnsmasq.pid
+
+PIDOF=$(which pidof)
 
 remove_file() {
   [ -f "$1" ] && rm "$1" || true
 }
 
 get_pid() {
-  local _pid
-  [ -n "$2" ] && [ -f "$2" ] && kill -0 `cat "$2"` 2>/dev/null && _pid=`cat "$2"`
-  [ -z "$_pid" ] && _pid=`pidof "$1"`
+  local _pid=
+  [ -n "$2" ] && [ -f "$2" ] && kill -0 $(cat "$2") 2>/dev/null && _pid=$(cat "$2")
+  [ -z "$_pid" ] && [ -x "$PIDOF" ] && _pid=$($PIDOF "$1")
   echo "$_pid"
 }
 
 kill_pid() {
   [ -n "$1" ] && for _i in $@; do kill "$_i" 2>/dev/null; done
+}
+
+hup() {
+  [ -n "$1" ] || return 0
+  kill -HUP "$1"
 }
 
 is_running() {
@@ -31,24 +39,24 @@ is_running() {
 }
 
 populate_dns_parts() {
-  _ips=`uci get network.soteria.ipaddr`
-  [ `echo "$_ips" | wc -w` -lt `echo "$DNS_PARTS" | wc -w` ] && return 1
-
+  _ips=$(uci get network.soteria.ipaddr)
+  [ $(echo "$_ips" | wc -w) -lt $(echo "$DNS_PARTS" | wc -w) ] && return 1
   for _dns_part in $DNS_PARTS; do
     _ip="${_ips%% *}"
     _ips="${_ips#* }"
-    eval `echo "$_dns_part" | tr "[a-z]" "[A-Z]"`_IP="$_ip"
+    name=$(echo "$_dns_part" | tr "[a-z]" "[A-Z]")
+    eval ${name}_IP="$_ip"
+    [ "$_ip" = "$_ips" ] && break
   done
-
-  return 0
 }
 
 dnsmasq_pid() {
   get_pid dnsmasq "$DNSMASQ_PIDFILE"
 }
 
-refresh_dnsmasq() {
-  kill -HUP `dnsmasq_pid`
+dnsmasq_refresh() {
+  PID=$(dnsmasq_pid)
+  is_running "$PID" && hup "$PID"
 }
 
 tinysrv_pid() {
@@ -56,38 +64,63 @@ tinysrv_pid() {
 }
 
 stop_tinysrv() {
-  kill_pid "`tinysrv_pid`"
+  kill_pid "$(tinysrv_pid)"
   remove_file "$TINYSRV_PIDFILE"
 }
 
-start_tinysrv() {
-  is_running `tinysrv_pid` && stop_tinysrv
+tinysrv_check() {
+  PID=$(tinysrv_pid)
+  is_running "$PID" && return 0
   [ -n "$TINYSRV_PIDFILE" ] || return 1
   [ -f "$TINYSRV_PIDFILE" ] && rm "$TINYSRV_PIDFILE"
-  local _service=`which tinysrv`
-  populate_dns_parts || return 0
+  local _service=$(which tinysrv)
   [ -x "$_service" ] || return 0
-  [ -d "$WWW_DIR" ] || mkdir -p "$WWW_DIR"
-  [ -d "$CRT_DIR" ] || mkdir -p "$CRT_DIR"
-  $_service -u nobody -P $TINYSRV_PIDFILE -k 443 $HSR_IP -p 80 $HSR_IP -k 443 -R $HSN_IP -p 80 -R $HSN_IP -p 80 -c $JUR_IP -p 80 -c -R $JUN_IP -p 80 -S $WWW_DIR $RTL_IP ${CRT_DIR:+-p 443 -S $WWW_DIR -C $CRT_DIR $RTL_IP} && return 0
-  return 1
+  $_service -u nobody -P "$TINYSRV_PIDFILE" ${HSR_IP:+ -k 443 "$HSR_IP" -p 80 "$HSR_IP"} ${HSN_IP:+ -k 443 -R "$HSN_IP" -p 80 -R "$HSN_IP"} ${JUR_IP:+ -p 80 -c "$JUR_IP"} ${JUN_IP:+ -p 80 -c -R "$JUN_IP"}
 }
 
-append_hosts() {
+hosts_append() {
   [ -n "$1" ] && [ -n "$2" ] || return 0
-  wget --no-check-certificate -q -O - "${SRC_LIST%/}/$1" | sed "s/^/$2\t/" >>$DNS_HOSTS
+  local _url="${SRC_LIST%/}/$1"
+  wget --no-check-certificate -q -O - "$_url" | sed "s/^/$2\t/"
 }
 
-update_hosts() {
-  >$DNS_HOSTS
-  populate_dns_parts
-  append_hosts analytics.txt $HSN_IP
+
+hosts_update() {
+  local _new_hosts="${DNS_HOSTS}_new"
+  touch "$_new_hosts"
+  chgrp dnsmasq "$_new_hosts"
+  chmod 640 "$_new_hosts"
+  hosts_append analytics.txt "$HSN_IP" >>"$_new_hosts"
   for _i in ads.txt affiliate.txt enrichments.txt fake.txt widgets.txt; do
-    append_hosts $_i $HSR_IP
+    hosts_append $_i "$HSR_IP" >>"$_new_hosts"
   done
+  if [ -s "$_new_hosts" ]; then
+    >"$DNS_HOSTS"
+    mv "$_new_hosts" "$DNS_HOSTS"
+  fi
 }
 
-refresh_hosts() {
-  update_hosts
-  is_running `dnsmasq_pid` && refresh_dnsmasq
+soteria_lock_file_create() {
+  [ -n "$1" ] || return 1
+  _lockfile=/tmp/.lock-soteria-$1
+  [ -e "$_lockfile" ] && kill -0 $(cat $_lockfile) 2>/dev/null && return 1
+  echo $$ >"$_lockfile"
+  trap "rm -f $_lockfile; exit" INT TERM EXIT
+  return 0
+}
+
+soteria_lock_file_destroy() {
+  [ -n "$1" ] || return 1
+  _lockfile=/tmp/.lock-soteria-$1
+  rm -f "$_lockfile"
+  trap - INT TERM EXIT
+}
+
+soteria_run() {
+  soteria_lock_file_create libsoteria || return 1
+  populate_dns_parts
+  tinysrv_check
+  hosts_update
+  dnsmasq_refresh
+  soteria_lock_file_destroy libsoteria
 }

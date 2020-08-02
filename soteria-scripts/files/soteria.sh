@@ -10,7 +10,7 @@
 case "$1" in
 
   refresh)
-    refresh_hosts
+    soteria_run
     ;;
 
 esac

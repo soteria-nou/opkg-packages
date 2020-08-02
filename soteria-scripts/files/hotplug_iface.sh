@@ -4,10 +4,10 @@
 
 [ "$ACTION" = "ifup" ] && [ "$INTERFACE" = "soteria" ] && {
   sleep 1
-  is_running `tinysrv_pid` || start_tinysrv
+  tinysrv_check
 }
 
 [ "$ACTION" = "ifup" ] && [ "$INTERFACE" = "wan" ] && {
   sleep 1
-  refresh_hosts
+  soteria_run
 }
